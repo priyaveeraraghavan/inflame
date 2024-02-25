@@ -151,7 +151,8 @@ get_wide_data <- function(gene_group_df, msmt_cols_to_keep) {
   
   long_df <- do.call(rbind, 
                      lapply(compartments,
-                            function(comp) inner_join(processed_data[[comp]], gene_group_df)[,cols_to_keep]))
+                            function(comp) gene_group_df[[comp]][,cols_to_keep])
+  )
   
   wide_df <- long_df %>% pivot_wider(id_cols=c(reference, gene_symbol, Annotation),
                                      names_from=compartment,
@@ -171,8 +172,7 @@ plot_heatmap <- function(compartment_name, gene_group_df) {
   # design_cols remove "intensity"
   design_col_rename <- gsub("_Intensity", "", design_subs$column_name)
   
-  gene_subset_df <- data.frame(processed_data[[compartment_name]] %>%
-                                 inner_join(gene_group_df))
+  gene_subset_df <- gene_group_df[[compartment_name]] %>% subset(!is.na(gene_group))
   
   heatmap_df <- gene_subset_df[,  design_subs$column_name]
   
@@ -205,9 +205,9 @@ plot_scatter <- function(compartment_name, comparison,
   ycol <- paste0(c("negLog10qval", comparison), collapse="_")
 
   
-  data_full <- data.frame(processed_data[[compartment_name]])
-  data_subset <- data.frame(processed_data[[compartment_name]] %>%
-    inner_join(gene_group_df))
+  data_full <- data.frame(gene_group_df[[compartment_name]])
+  data_subset <- data.frame(gene_group_df[[compartment_name]] %>%
+    subset(!is.na(gene_group)))
   
   
   plt <- ggplot(data_full, aes_string(xcol, ycol)) +
@@ -239,8 +239,8 @@ plot_boxplot <- function(compartment_name, gene_group_df) {
   
   column_names <- design_subset$column_name
   
-  data_subset <- data.frame(processed_data[[compartment_name]] %>% 
-                              inner_join(gene_group_df))
+  data_subset <- data.frame(gene_group_df[[compartment_name]] %>% 
+                            subset(!is.na(gene_group)))
   
   if (nrow(data_subset) > 0) {
 
@@ -270,9 +270,9 @@ plot_boxplot <- function(compartment_name, gene_group_df) {
 plot_violin_log2FC <- function(compartment_name, gene_group_df) { #experiment, annot_df) {
 
   
-  data_subset <- data.frame(processed_data[[compartment_name]] %>%
-                              inner_join(gene_group_df))
-   
+  data_subset <- data.frame(gene_group_df[[compartment_name]] %>%
+                            subset(!is.na(gene_group)))
+
   annot_df_subs <- data_subset %>% 
     dplyr::select(contains("log2FC") | matches("gene_group")) %>%
     pivot_longer(contains("log2FC"), names_to="comparison", values_to="log2FC")
@@ -381,31 +381,41 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   
-  empty_df <- processed_data[['gene_annotations']] %>% 
-    subset(gene_symbol == "DoesNotExist") %>%
-    rowwise() %>%
-    mutate(gene_group="None")
+  compartments <- unique(processed_data[['design']]$compartment)
+  
+  empty_df_lst <- lapply(compartments, 
+                     function(comp) processed_data[[comp]] %>% 
+                       rowwise() %>%
+                       mutate(gene_group=NA)
+  )
+  names(empty_df_lst) <- compartments
+    #subset(gene_symbol == "DoesNotExist") %>%
+    #rowwise() %>%
+    #mutate(gene_group="None"))
 
   annotation_dfs <- reactiveValues(  
     
     # gene group page
-    gene_group_df = empty_df,
+    gene_group_df = empty_df_lst,
     # single gene page
-    gene_symbol_df = empty_df,
+    gene_symbol_df = empty_df_lst,
     # gene region explorer
-    gene_region_df = empty_df
+    gene_region_df = empty_df_lst
   )
     
   
   observeEvent(input$symbol, ignoreNULL = TRUE, {
     if (nchar(input$symbol) > 0) {
       gene_symbols <- c(gsub(" ", "", input$symbol))
-      annotation_dfs$gene_symbol_df <- subset(processed_data[['gene_annotations']], 
-                                              gene_symbol %in% gene_symbols) %>%
-        rowwise() %>% mutate(gene_group = "Gene_Selection") %>%
-        dplyr::select(reference, gene_symbol, gene_group)
+      annotation_dfs$gene_symbol_df <- lapply(compartments,
+                                              function(comp) processed_data[[comp]] %>%
+                                                rowwise() %>%
+                                                mutate(gene_group = ifelse(gene_symbol %in% gene_symbols, "Gene_Selection", NA)))
+      
+      names(annotation_dfs$gene_symbol_df) <- compartments
+      
     }
-    
+                                                  
   })
   
   observeEvent(input$panelregion_plot_brush, ignoreNULL = TRUE, {
@@ -417,14 +427,22 @@ server <- function(input, output) {
     brush_xcol <- paste0(c("log2FC", comparison_name), collapse="_")
     brush_ycol <- paste0(c("negLog10qval", comparison_name), collapse="_")
     
-    annotation_dfs$gene_region_df <- processed_data[[compartment_name]] %>% 
+    # get the gene names from plot in question
+    genes_in_region <- (processed_data[[compartment_name]] %>% 
       dplyr::filter(.data[[brush_xcol]] < input$panelregion_plot_brush$xmax &
                       .data[[brush_xcol]] > input$panelregion_plot_brush$xmin &
                       .data[[brush_ycol]] < input$panelregion_plot_brush$ymax & 
-                      .data[[brush_ycol]] > input$panelregion_plot_brush$ymin) %>%
-      rowwise() %>% 
-      mutate(gene_group="Regional_Selection") %>% 
-      dplyr::select(reference, gene_symbol, gene_group)
+                      .data[[brush_ycol]] > input$panelregion_plot_brush$ymin))$reference
+
+    annotation_dfs$gene_region_df <- lapply(
+      compartments,
+      function(comp) processed_data[[comp]] %>%
+        rowwise() %>%
+        mutate(gene_group = ifelse(reference %in% genes_in_region, "Regional_Selection", NA)))
+    
+    names(annotation_dfs$gene_region_df) <- compartments
+    
+      
   })
   
   observeEvent(input$gene_group_input, ignoreNULL=TRUE, {
@@ -444,9 +462,12 @@ server <- function(input, output) {
     map_pct <- (num_unique_ids-length(missing_ids))/length(num_unique_ids)*100
     
     # merge with input_df
-    annotation_dfs$gene_group_df <- processed_data[['gene_annotations']] %>% 
-      inner_join(gene_gp_df)
-    
+    annotation_dfs$gene_group_df <- lapply(
+      compartments,
+      function(comp) processed_data[[comp]] %>% left_join(gene_gp_df)
+    )
+    names(annotation_dfs$gene_group_df) <- compartments
+       
   })
   
   plot_defs <- expand.grid(unique(processed_data[['design']]$compartment),
