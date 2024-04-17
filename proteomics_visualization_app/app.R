@@ -14,19 +14,6 @@ library(bslib)
 # Setup data
 load("processed_proteomics_data.RData")
 
-get_dataset_from_type <- function(dataset_type) {
-  # quick way to get all original data for a type of data
-  if (dataset_type == "ip_data") {
-    return(fixed_processed_ip_data)
-  } else if (dataset_type == "apex_sp_data") {
-    return(fixed_processed_apex_singleplex_data)
-  } else if (dataset_type == "apex_time_data") {
-    return(fixed_processed_apex_timecourse_data) 
-  } else {
-    return(NULL)
-  }
-}
-
 
 accent_colors <- c("#999999",  "#D55E00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2","#E69F00", "#F0E442")
 get_color_intensity <- function(color_name, extreme) {
@@ -40,6 +27,95 @@ accent_colors_tint <- sapply(accent_colors, function(col) get_color_intensity(co
 ##################
 ### Data Wrangling
 ##################
+
+get_dataset_measurements <- function(annotated_data, dataset_names, column_names, show_filter=TRUE) {
+  
+  # make sure that column_names also includes boolean of "show"
+  if (show_filter) {
+    column_names <- unique(c(column_names, "show"))
+  }
+  
+  # grab and bind the relevant columns
+  # important that all dataframes have the same column_names!
+  df <- do.call(rbind,
+                lapply(dataset_names,
+                       function(name) annotated_data[[name]][,column_names] %>%
+                         rowwise() %>%
+                         mutate(dataset_name=name)
+                )
+  )
+  
+  # only return valid rows from data
+  # for example, with IP data this is a filtration bool w.r.t. 
+  # background enrich of organelle itself
+  if (show_filter) {
+    df <- subset(df, show)
+  } 
+  
+  return(df)
+  
+}
+get_measurement_columns <- function(df, measurement_regexes) {
+  df_cols <- colnames(df)
+  msmt_cols <- unlist(sapply(measurement_regexes, 
+                             function(rxp) df_cols[grepl(rxp, df_cols)]))
+  return(unique(msmt_cols))
+}
+
+# merge all ip data into one
+get_ipall_data <- function() {
+  logfc_cols <- get_measurement_columns(fixed_processed_ip_data[['golgi']], c("log2FC"))
+  qval_cols <- get_measurement_columns(fixed_processed_ip_data[['golgi']], c("negLog10qval"))
+  
+  dataset_names <- unique(fixed_processed_ip_data$design$dataset_name)
+  gene_ref_names <- c("reference", "gene_symbol_species", "filtered")
+  
+  logfc_cols_all <- get_dataset_measurements(fixed_processed_ip_data, 
+                                             dataset_names=dataset_names,
+                                             column_names=c(gene_ref_names, logfc_cols),
+                                             show_filter=FALSE)
+  qval_cols_all <- get_dataset_measurements(fixed_processed_ip_data, 
+                                            dataset_names=dataset_names,
+                                            column_names=c(gene_ref_names, qval_cols),
+                                            show_filter=FALSE)
+  
+  logfc_cols_all <- logfc_cols_all %>% 
+    pivot_longer(!c(reference, gene_symbol_species, dataset_name, filtered), 
+                 names_to="comparison", values_to = "log2FC")
+  logfc_cols_all$comparison <- gsub("log2FC_", "", logfc_cols_all$comparison)
+
+  qval_cols_all <- qval_cols_all %>% 
+    pivot_longer(!c(reference, gene_symbol_species, dataset_name, filtered), 
+                 names_to="comparison", values_to = "negLog10qval")
+  qval_cols_all$comparison <- gsub("negLog10qval_", "", qval_cols_all$comparison)
+  
+  ipall_data <- logfc_cols_all %>% 
+    inner_join(qval_cols_all, 
+               by=c("reference", "gene_symbol_species", "filtered", "dataset_name", "comparison"))
+  
+  ipall_data$show <- TRUE
+  
+  return(ipall_data)
+  
+  
+}
+ipall_data <- get_ipall_data()
+
+get_dataset_from_type <- function(dataset_type) {
+  # quick way to get all original data for a type of data
+  if (dataset_type == "ip_data") {
+    return(fixed_processed_ip_data) 
+  } else if (dataset_type == "ipall_data") {
+    return(list(ipall_data=ipall_data))
+  } else if (dataset_type == "apex_sp_data") {
+    return(fixed_processed_apex_singleplex_data)
+  } else if (dataset_type == "apex_time_data") {
+    return(fixed_processed_apex_timecourse_data) 
+  } else {
+    return(NULL)
+  }
+}
+
 
 update_data_annotations <- function(dataset_info, 
                                     new_gene_annot_df=data.frame(reference=character(0),
@@ -89,12 +165,7 @@ update_data_annotations <- function(dataset_info,
   return(annot_dataset)
 }
 
-get_measurement_columns <- function(df, measurement_regexes) {
-  df_cols <- colnames(df)
-  msmt_cols <- unlist(sapply(measurement_regexes, 
-                      function(rxp) df_cols[grepl(rxp, df_cols)]))
-  return(unique(msmt_cols))
-}
+
 
 get_single_data_table_output <- function(df, measurement_regexes, 
                                          gene_identifiers=c("reference", "gene_symbol_species"), 
@@ -150,30 +221,6 @@ get_wide_multiple_data_table_output <- function(ds_obj_lst, ds_names, measuremen
   return(msmt_wide)
 }
 
-
-get_dataset_measurements <- function(annotated_data, dataset_names, column_names) {
-  
-  # make sure that column_names also includes boolean of "show"
-  column_names <- unique(c(column_names, "show"))
-  
-  # grab and bind the relevant columns
-  # important that all dataframes have the same column_names!
-  df <- do.call(rbind,
-                lapply(dataset_names,
-                       function(name) annotated_data[[name]][,column_names] %>%
-                         rowwise() %>%
-                         mutate(dataset_name=name)
-                )
-  )
-  
-  # only return valid rows from data
-  # for example, with IP data this is a filtration bool w.r.t. 
-  # background enrich of organelle itself
-  df <- subset(df, show)
-  
-  return(df)
-  
-}
 
 get_wide_data <- function(processed_data, dataset_names, column_names, filter_bool=FALSE) {
   # function that gets the relevant information for organelles and WCP for a gene set
@@ -304,7 +351,9 @@ plot_heatmap <- function(annotated_data, ds_name, design_info, cellwidth=NA, gen
 
 plot_scatter <- function(annotated_data, ds_name, design_info, xcol, ycol, 
                          annotate_genes=TRUE, max_genes_annot=10,
-                         gene_group_color_map=NULL) {
+                         gene_group_color_map=NULL,
+                         col_facet=NULL,
+                         row_facet=NULL) {
 
   data_full <- data.frame(annotated_data[[ds_name]] %>% 
                             subset(show))
@@ -312,7 +361,8 @@ plot_scatter <- function(annotated_data, ds_name, design_info, xcol, ycol,
 
   data_subset <- data.frame(data_full %>%
                               subset(!is.na(gene_group)))
-  
+  print("plot data subset")
+  print(data_subset)
   
   plt <- ggplot(data_full, aes_string(xcol, ycol),color='black') + 
     geom_point(alpha=0.5) 
@@ -331,9 +381,9 @@ plot_scatter <- function(annotated_data, ds_name, design_info, xcol, ycol,
     geom_vline(xintercept=-0.5, linetype="dashed") +
     geom_hline(yintercept=-log10(0.05), linetype="dashed") + 
     xlab(cleanup_axes_names(xcol)) + 
-    ylab(cleanup_axes_names(ycol)) 
+    ylab(cleanup_axes_names(ycol))
   
-  if (annotate_genes & nrow(data_subset) > 0) {
+  if (annotate_genes) {
     data_subset$gene_score <- abs(data_subset[xcol])*data_subset[ycol]
     to_annotate <- data_subset %>%
       arrange(desc(gene_score)) %>%
@@ -345,6 +395,7 @@ plot_scatter <- function(annotated_data, ds_name, design_info, xcol, ycol,
                                   size=3,
                                   show.legend = FALSE)
   }
+
   
   if (!is.null(gene_group_color_map)) {
     plt <- plt + scale_color_manual(values=gene_group_color_map)
@@ -381,7 +432,8 @@ plot_boxplot_intensity <- function(annotated_data, ds_name, design_info, gene_gr
       geom_boxplot() + 
       geom_point(position = position_dodge(width=0.8)) +
       theme_classic() +
-      theme(legend.position="bottom")
+      theme(legend.position="bottom") +
+      theme(legend.title=element_blank())
   } else {
     ggplot()
   }
@@ -447,6 +499,10 @@ plot_violin_msmt <- function(annotated_data, ds_name,
   if (!is.null(gene_group_color_map)) {
     plt <- plt + scale_color_manual(values=gene_group_color_map)
   }
+  
+  # remove legend name
+  plt <- plt + theme(legend.title=element_blank())
+  
   
   return(plt)
 }
@@ -580,17 +636,17 @@ format_title <- function(labels, fontsize=15) {
   return(h4(text_cleaned, style=sprintf('font-size:%spx;color:black;', fontsize)))
 }
 
-define_static_plot <- function(panel, plot_type, dataset_name, treatvsctrl) {
+define_static_plot <- function(panel, plot_type, dataset_name, treatvsctrl, box_height=300, plot_height="250px") {
   
-  return(box(title=format_title(c(dataset_name, treatvsctrl)), width = NULL, height = 300,
+  return(box(title=format_title(c(dataset_name, treatvsctrl)), width = NULL, height = box_height,
              plotOutput(outputId = sprintf("%s-%s_static-%s-%s", panel, plot_type, dataset_name, treatvsctrl),
-                        height="250px")))
+                        height=plot_height)))
 }
 
-define_interactive_scatter <- function(panel, dataset_name, treatvsctrl) {
-  return(box(title=format_title(c(dataset_name, treatvsctrl)), width = NULL, height = 300,
+define_interactive_scatter <- function(panel, dataset_name, treatvsctrl, box_height=300, plot_height="250px") {
+  return(box(title=format_title(c(dataset_name, treatvsctrl)), width = NULL, height = box_height,
              plotOutput(outputId = sprintf("%s-scatterplot_reactive-%s-%s", panel, dataset_name, treatvsctrl), 
-                        height="250px",
+                        height=plot_height,
                         brush = brushOpts(id=sprintf("%s_plot_brush", panel), resetOnNew = TRUE))))
 }
 
@@ -643,16 +699,18 @@ ui <- fluidPage(
                      placeholder = "e.g., ACTB, E9Q5F4, ENSG00000075624"
                    )     # might also want to try textAreaInput for longer
                  )),
-                 fluidRow(lapply(ip_datasets,
-                                 function(ds_name)
-                                   column(
-                                     width = 2,
-                                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
-                                            function(comparison) {
-                                              define_static_plot("ip__panelsymbol", "scatterplot", ds_name, comparison)
-                                            })
-                                   ))),                 
-                 fluidRow(lapply(ip_datasets,
+                 fluidRow(box(width=12,
+                              define_static_plot("ipall__panelsymbol", "scatterplot", "all_datasets", "all", box_height=750, plot_height="700px"))),
+                 # fluidRow(lapply(ip_datasets,
+                 #                 function(ds_name)
+                 #                   column(
+                 #                     width = 2,
+                 #                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
+                 #                            function(comparison) {
+                 #                              define_static_plot("ip__panelsymbol", "scatterplot", ds_name, comparison)
+                 #                            })
+                 #                   ))),                 
+                 fluidRow(column(width=1), lapply(ip_datasets,
                                  function(ds_name)
                                    column(
                                      width = 2,
@@ -663,19 +721,22 @@ ui <- fluidPage(
                conditionalPanel(
                  condition = "input.ip_input_type == 'Gene Region Explorer'",
                  fluidRow(box(width=12, p("Select and drag to capture genes in a region of any scatterplot."))),
-                 fluidRow(lapply(ip_datasets,
-                                 function(ds_name)
-                                   column(
-                                     width = 2,
-                                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
-                                            function(comparison) {
-                                              define_interactive_scatter("ip__panelregion", ds_name, comparison)
-                                            })
-                                   ))),
+                 
+                 fluidRow(box(width=12,
+                              define_interactive_scatter("ipall__panelregion", "all_datasets", "all", box_height=750, plot_height="700px"))),
+                 # fluidRow(lapply(ip_datasets,
+                 #                 function(ds_name)
+                 #                   column(
+                 #                     width = 2,
+                 #                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
+                 #                            function(comparison) {
+                 #                              define_interactive_scatter("ip__panelregion", ds_name, comparison)
+                 #                            })
+                 #                   ))),
                  lapply(ip_datasets,
                         function(ds_name)
                           fluidRow(box(
-                            format_title("Gene Abundance Heatmap", ds_name),
+                            format_title(c("Gene Abundance Heatmap", ds_name)),
                             width =
                               12,
                             plotOutput(sprintf(
@@ -699,16 +760,18 @@ ui <- fluidPage(
                        )
                    )
                  ),
-                 fluidRow(lapply(ip_datasets,
-                                 function(ds_name)
-                                   column(
-                                     width = 2,
-                                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
-                                            function(comparison) {
-                                              define_static_plot("ip__panelgroup", "scatterplot", ds_name, comparison)
-                                            })
-                                   ))),
-                 fluidRow(lapply(ip_datasets,
+                 fluidRow(box(width=12,
+                              define_static_plot("ipall__panelgroup", "scatterplot", "all_datasets", "all", box_height=750, plot_height="700px"))),
+                 # fluidRow(lapply(ip_datasets,
+                 #                 function(ds_name)
+                 #                   column(
+                 #                     width = 2,
+                 #                     lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
+                 #                            function(comparison) {
+                 #                              define_static_plot("ip__panelgroup", "scatterplot", ds_name, comparison)
+                 #                            })
+                 #                   ))),
+                 fluidRow(column(width=1), lapply(ip_datasets,
                                  function(ds_name)
                                    column(
                                      width = 2,
@@ -935,6 +998,7 @@ server <- function(input, output, session) {
                                        reference=character(0)),
     # color map for gene group so all plots are consistent
     gene_group_color_map = NULL,
+    ipall_data = update_data_annotations(get_dataset_from_type("ipall_data"), filter_data=FALSE),
     # updated ip data
     ip_data = update_data_annotations(get_dataset_from_type("ip_data"), filter_data=FALSE),
     # updated apex timecourse data
@@ -1149,7 +1213,7 @@ server <- function(input, output, session) {
   }
   
   get_genes_in_brush_region <- function(brushed_data) {
-    
+    print(brushed_data)
     brush_xcol <- brushed_data$mapping$x
     brush_ycol <- brushed_data$mapping$y
 
@@ -1160,24 +1224,43 @@ server <- function(input, output, session) {
     dataset_type <- paste0(ds_panel, "_data")
     
     dataset_name <- strsplit(brush_output_id, "-")[[1]][3]
+    
     # check if the dataset name is from a dropdown
     # if so get from input
     if (grepl("select", dataset_name)) {
       dataset_name <- input[[dataset_name]] 
     }
 
+
     if (!is.null(dataset_name)) {
       original_df <- get_dataset_from_type(dataset_type)[[dataset_name]]
+      region_lim <- c(xmax=brushed_data$xmax,
+                         xmin=brushed_data$xmin,
+                         ymax=brushed_data$ymax,
+                         ymin=brushed_data$ymin)
+
+      if (ds_panel == "ipall") {
+        original_df <- get_dataset_from_type("ipall_data")[["ipall_data"]]
+        
+        
+        var1 <- brushed_data$mapping$panelvar1
+        var2 <- brushed_data$mapping$panelvar2
+        val1 <- brushed_data$panelvar1
+        val2 <- brushed_data$panelvar2
+ 
+        original_df <- original_df[(original_df[[var1]] == val1 & original_df[[var2]] == val2),]
+      }
       
       genes_in_region <- (original_df %>% 
-                            dplyr::filter(.data[[brush_xcol]] < brushed_data$xmax &
-                                            .data[[brush_xcol]] > brushed_data$xmin &
-                                            .data[[brush_ycol]] < brushed_data$ymax & 
-                                            .data[[brush_ycol]] > brushed_data$ymin))$reference
+                            dplyr::filter(.data[[brush_xcol]] < region_lim[['xmax']] &
+                                            .data[[brush_xcol]] > region_lim[['xmin']] &
+                                            .data[[brush_ycol]] < region_lim[['ymax']] & 
+                                            .data[[brush_ycol]] > region_lim[['ymin']]))$reference
       
       
       new_gene_group_df <- data.frame(gene_id=genes_in_region, 
                                       gene_group="Regional_Selection")
+      print(new_gene_group_df)
     } else {
       new_gene_group_df <- data.frame(gene_id=character(0),
                                       gene_group=character(0))
@@ -1211,8 +1294,8 @@ server <- function(input, output, session) {
       annotation_dfs$gene_group_color_map <- NULL
     }
     
-    print("current annotation df")
-    print(annotation_dfs$current_gene_group_df)
+    #print("current annotation df")
+    #print(annotation_dfs$current_gene_group_df)
   }
   
   update_gene_input <- function(input_value, input_name, filter_bool=FALSE) {
@@ -1298,6 +1381,19 @@ server <- function(input, output, session) {
       new_gene_annot_df=annotation_dfs$current_gene_group_df,
       filter_data=filter_bool)
     
+    # additionally update ipall 
+    if (reactive_df_name == "ip_data") {
+      annotation_dfs[["ipall_data"]] <- update_data_annotations(
+        get_dataset_from_type("ipall_data"),
+        new_gene_annot_df=annotation_dfs$current_gene_group_df,
+        filter_data=filter_bool)
+    } else if (reactive_df_name == "ipall_data") {
+        annotation_dfs[["ip_data"]] <- update_data_annotations(
+          get_dataset_from_type("ip_data"),
+          new_gene_annot_df=annotation_dfs$current_gene_group_df,
+          filter_data=filter_bool)
+    }
+    
   }
 
 
@@ -1362,6 +1458,12 @@ server <- function(input, output, session) {
                       filter_bool = filter_status)
   })
   
+  observeEvent(input$ipall__panelregion_plot_brush, ignoreNULL = TRUE, {
+    filter_status <- input$ip_filter == "Yes"
+    update_gene_input(input$ipall__panelregion_plot_brush, "ipall__panelregion_plot_brush",
+                      filter_bool = filter_status)
+  })
+  
   observeEvent(input$apex_sp__panelregion_plot_brush, ignoreNULL = TRUE, {
     update_gene_input(input$apex_sp__panelregion_plot_brush, "apex_sp__panelregion_plot_brush")
   })
@@ -1407,12 +1509,43 @@ server <- function(input, output, session) {
       input$apex_sp__panelregion_plot_brush,
       input$apex_time__panelregion_plot_brush,
       input$ip__gene_group_input,
-      input$apex_sp__gene_group_input,
+      input$apex_sp__gene_group_input, 
       input$apex_time__gene_group_input
     )
   })
   ## Scatterplot outputs
-  # ignoreInit = TRUE, 
+  
+  # IP facetgrid
+  lapply(c("ipall__panelsymbol-scatterplot_static-all_datasets-all", 
+           "ipall__panelregion-scatterplot_reactive-all_datasets-all",
+           "ipall__panelgroup-scatterplot_static-all_datasets-all"), 
+         function(panel_name) {
+  output[[panel_name]] <-
+    renderPlot({
+      # if symbol or region plot gene symbols
+      plot_scatter(
+        annotation_dfs[['ipall_data']],
+        'ipall_data',
+        NULL,
+        'log2FC',
+        'negLog10qval',
+        max_genes_annot = 50,
+        gene_group_color_map = annotation_dfs$gene_group_color_map
+      ) + facet_wrap(comparison ~ dataset_name, scales="free", ncol=5) +
+        theme(legend.position="top") +
+        ylab("-log10(qval)") + xlab("Log2 Fold Change") + 
+        theme(
+        axis.text.x = element_text(size = 12, vjust = 0.65),
+        axis.text.y = element_text(size = 12), 
+        axis.title = element_text(size = 14),
+        strip.text = element_text(size=14),
+        strip.background = element_blank())
+    })
+  
+         }
+  )
+
+  # other scatterplots
   observeEvent(event_trigger(), {
       panel_name <- get_current_panel()
     
@@ -1420,19 +1553,19 @@ server <- function(input, output, session) {
       plot_type <- ifelse(grepl("region", panel_name), 
                           "scatterplot_reactive", "scatterplot_static")
       treat <- "all"
-      
-      if (grepl("ip", panel_name)) {
-        ds_comp_grid <- expand.grid(
-          dataset_name=unique(get_dataset_from_type("ip_data")$design$dataset_name),
-          plotname_suffix=unique(get_dataset_from_type("ip_data")$comparisons$comparison)
-        )
-        ds_comp_grid$xcol <- paste0("log2FC_", ds_comp_grid$plotname_suffix)
-        ds_comp_grid$ycol <- paste0("negLog10qval_", ds_comp_grid$plotname_suffix)
-        ds_comp_grid$dataset_output_name <- ds_comp_grid$dataset_name
+      if (!grepl("ip", panel_name)) {
+      # if (grepl("ip", panel_name)) {
+      #   ds_comp_grid <- expand.grid(
+      #     dataset_name=unique(get_dataset_from_type("ip_data")$design$dataset_name),
+      #     plotname_suffix=unique(get_dataset_from_type("ip_data")$comparisons$comparison)
+      #   )
+      #   ds_comp_grid$xcol <- paste0("log2FC_", ds_comp_grid$plotname_suffix)
+      #   ds_comp_grid$ycol <- paste0("negLog10qval_", ds_comp_grid$plotname_suffix)
+      #   ds_comp_grid$dataset_output_name <- ds_comp_grid$dataset_name
+      #   
+      #   ds_type <- "ip_data"
         
-        ds_type <- "ip_data"
-        
-      } else if (grepl("apex_sp", panel_name)) {
+      if (grepl("apex_sp", panel_name)) {
         # define for single plex
         sp_comp_grid <- data.frame(dataset_name="all_bait_treat_single_plex",
                                    comparison=apex_sp_comparison())
@@ -1467,7 +1600,7 @@ server <- function(input, output, session) {
         
         ds_type <- "apex_time_data"
       }
-      print(ds_comp_grid)
+
       lapply(1:nrow(ds_comp_grid),
              function(i) {
                print(ds_comp_grid$dataset_output_name[i])
@@ -1477,7 +1610,6 @@ server <- function(input, output, session) {
                          ds_comp_grid$dataset_output_name[i], 
                          ds_comp_grid$plotname_suffix[i])
                print(pltname)
-               
                output[[pltname]] <-
                  renderPlot({
                    # if symbol or region plot gene symbols
@@ -1489,9 +1621,10 @@ server <- function(input, output, session) {
                        ds_comp_grid$ycol[i],
                        #annotate_genes = FALSE,
                        gene_group_color_map = annotation_dfs$gene_group_color_map
-                       )
+                       ) + theme(legend.position='top')
                    })
                })
+      }
   })
   
   ## Heatmaps outputs
