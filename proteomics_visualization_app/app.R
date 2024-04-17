@@ -1,10 +1,12 @@
 library(DT)
 library(ggrepel)
 library(ggpubr)
+library(gridExtra)
 library(shiny)
 library(tidyverse)
 library(shinyjs)
 library(shinydashboard)
+library(shinybrowser)
 library(RColorBrewer)
 library(pheatmap)
 library(bslib)
@@ -218,7 +220,7 @@ cleanup_axes_names <- function(ax_name) {
   ax_name
 }
 
-plot_heatmap <- function(annotated_data, ds_name, design_info, gene_group_color_map=NULL) {
+plot_heatmap <- function(annotated_data, ds_name, design_info, cellwidth=NA, gene_group_color_map=NULL) {
   # compartment_name: string compartment 
   # gene_group_df: df of ['reference', 'gene_group']
   
@@ -287,11 +289,16 @@ plot_heatmap <- function(annotated_data, ds_name, design_info, gene_group_color_
   annot_colors <- list(gene_group=gene_group_color_map,
                        condition=condition_colors)
   
+  
+  
   pheatmap(heatmap_df, color=heatmap_color,
            annotation_colors=annot_colors,
            annotation_row = annot_row,
            annotation_col = annot_col,
-           cluster_rows = cluster_rows_bool)
+           cluster_rows = cluster_rows_bool,
+           cellwidth = cellwidth)
+  
+
   
 }
 
@@ -403,7 +410,7 @@ plot_violin_msmt <- function(annotated_data, ds_name,
   gene_group_sizes <- (data_subset %>%
                          group_by(gene_group) %>%
                          summarize(number=n()))$number
-  if (max(gene_group_sizes) < 30) {
+  if (max(c(0, gene_group_sizes)) < 30) {
     plot_type <- "box"
   } else {
     plot_type <- "violin"
@@ -428,15 +435,13 @@ plot_violin_msmt <- function(annotated_data, ds_name,
                 aes(comparison, measurement, color=gene_group)) +
     geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + 
     theme_classic() +
-    theme(legend.position="bottom") +
-    ggtitle(ds_name)
+    theme(legend.position="bottom") 
   } else {
       plt <- ggplot(annot_df_subs, aes(comparison, measurement, color=gene_group)) +
         geom_boxplot() +
         geom_point(position=position_jitterdodge(jitter.width=0.1)) +
         theme_classic() +
-        theme(legend.position="bottom") +
-        ggtitle(ds_name)
+        theme(legend.position="bottom")
   }
   
   if (!is.null(gene_group_color_map)) {
@@ -610,6 +615,7 @@ timecourse_heatmap_datasets <- c("nlrp3_nigericin_timecourse", "nlrp3_cl097_time
 
 ## Define UI for application 
 ui <- fluidPage(
+  shinybrowser::detect(),
   titlePanel("INFLAME"),
   tabsetPanel(id = "tabs",
     tabPanel("Organelle IP",
@@ -644,8 +650,8 @@ ui <- fluidPage(
                                      lapply(subset(ip_comparisons_df, dataset_name == ds_name)$comparison,
                                             function(comparison) {
                                               define_static_plot("ip__panelsymbol", "scatterplot", ds_name, comparison)
-                                            }),
-                                   ))),
+                                            })
+                                   ))),                 
                  fluidRow(lapply(ip_datasets,
                                  function(ds_name)
                                    column(
@@ -671,7 +677,7 @@ ui <- fluidPage(
                           fluidRow(box(
                             format_title("Gene Abundance Heatmap", ds_name),
                             width =
-                              10,
+                              12,
                             plotOutput(sprintf(
                               "ip__panelregion_heatmap_static_%s_all", ds_name
                             ))
@@ -713,7 +719,7 @@ ui <- fluidPage(
                           fluidRow(box(
                             format_title("Gene Abundance Heatmap", ds_name),
                             width =
-                              10,
+                              12,
                             plotOutput(sprintf(
                               "ip__panelgroup_heatmap_static_%s_all", ds_name
                             ))
@@ -781,7 +787,7 @@ ui <- fluidPage(
                                })
                ),
                fluidRow(box(format_title(c("Gene Abundance Heatmap")), 
-                            width=10,
+                            width=12,
                             plotOutput(sprintf("apex_sp__panelregion_heatmap_static_all_bait_treat_single_plex_all"))
                )),
                fluidRow(
@@ -818,10 +824,9 @@ ui <- fluidPage(
                         
                ),
                fluidRow(box(format_title(c("Gene Abundance Heatmap")),
-                            width=10,
+                            width=12,
                             plotOutput(sprintf("apex_sp__panelgroup_heatmap_static_all_bait_treat_single_plex_all")))
                ),
-               #fluidRow(downloadButton('downloadData',"Download the data")),
                fluidRow(
                  box(width = 12, DT::dataTableOutput("apex_sp__panelgroup_table")))
              ),
@@ -849,7 +854,6 @@ ui <- fluidPage(
                                                              "any"))
                         })
                ),
-               #fluidRow(downloadButton('downloadData',"Download the data")),
                fluidRow(
                  box(width = 12, DT::dataTableOutput("apex_time__panelsymbol_table"))
                )
@@ -867,7 +871,7 @@ ui <- fluidPage(
                ),
                lapply(timecourse_heatmap_datasets,
                       function(ds_name) { fluidRow(box(format_title(c("Gene Abundance Heatmap", ds_name)), 
-                                                       width=10, 
+                                                       width=12, 
                                                        plotOutput(sprintf("apex_time__panelregion_heatmap_static_%s_all", ds_name))))
                       }
                ),
@@ -896,7 +900,7 @@ ui <- fluidPage(
                ),
                lapply(timecourse_heatmap_datasets,
                       function(ds_name) fluidRow(box(format_title(c("Gene Abundance Heatmap", ds_name)), 
-                                                     width=10, 
+                                                     width=12, 
                                                      plotOutput(sprintf("apex_time__panelgroup_heatmap_static_%s_all", ds_name))))
                ),
                fluidRow(
@@ -1385,10 +1389,32 @@ server <- function(input, output, session) {
   ######################
   ## Outputs
   ######################
-  
+
+  event_trigger <- reactive({
+    list(
+      input$tabs,
+      input$apex_time_comparison,
+      input$apex_time_dataset_select,
+      input$apex_sp_comparison,
+      input$apex_experiment_type,
+      input$apex_input_type,
+      input$ip_input_type,
+      input$ip_filter,
+      input$ip__symbol,
+      input$apex_sp__symbol,
+      input$apex_time__symbol,
+      input$ip__panelregion_plot_brush,
+      input$apex_sp__panelregion_plot_brush,
+      input$apex_time__panelregion_plot_brush,
+      input$ip__gene_group_input,
+      input$apex_sp__gene_group_input,
+      input$apex_time__gene_group_input
+    )
+  })
   ## Scatterplot outputs
-  observe({
-    panel_name <- get_current_panel()
+  # ignoreInit = TRUE, 
+  observeEvent(event_trigger(), {
+      panel_name <- get_current_panel()
     
       # name determines reactive or static scatter
       plot_type <- ifelse(grepl("region", panel_name), 
@@ -1469,7 +1495,7 @@ server <- function(input, output, session) {
   })
   
   ## Heatmaps outputs
-  observe({
+  observeEvent(event_trigger(), {
     panel_name <- get_current_panel()
     if (grepl("group|region", panel_name)) {
       
@@ -1494,11 +1520,13 @@ server <- function(input, output, session) {
                pltname <-
                  sprintf("%s_%s_%s_%s",
                          panel_name, plot_type, ds_name, treat)
+               browser_width <- shinybrowser::get_width()
                output[[pltname]] <-
                  renderPlot({
                    plot_heatmap(annotation_dfs[[ds_type]],
                             ds_name,
                             get_dataset_from_type(ds_type)$design,
+                            cellwidth = round(browser_width/30),
                             gene_group_color_map = annotation_dfs$gene_group_color_map
                )
                
@@ -1508,7 +1536,7 @@ server <- function(input, output, session) {
     })
   
   ## Boxplot outputs
-  observe({
+  observeEvent(event_trigger(), {
     panel_name <- get_current_panel()
     if (grepl("symbol", panel_name) & grepl("ip|apex_sp", panel_name)) {
       
@@ -1546,7 +1574,7 @@ server <- function(input, output, session) {
   
 
   ## Violinplot outputs
-  observe({
+  observeEvent(event_trigger(), {
     panel_name <- get_current_panel()
     plot_type <- "violinplot_static"
     
@@ -1616,7 +1644,7 @@ server <- function(input, output, session) {
   
 
   ## Timecourse lm plots
-  observe({
+  observeEvent(event_trigger(), {
     panel_name <- get_current_panel()
     if (grepl("time", panel_name)) {
       dataset_names <- c("nigericin_timecourse_linear_model", "cl097_timecourse_linear_model")
@@ -1639,7 +1667,7 @@ server <- function(input, output, session) {
   })
 
   ## Data table output
-  observe({
+  observeEvent(event_trigger(), {
     panel_name <- get_current_panel()
     tbl_name <- paste0(panel_name, "_table")
     
@@ -1661,7 +1689,7 @@ server <- function(input, output, session) {
                       extensions = 'FixedColumns',
                       options =
                         list(scrollX = T,
-                             fixedColumns = list(leftColumns = 3))
+                             fixedColumns = list(leftColumns = 4))
       )
       })
   })
