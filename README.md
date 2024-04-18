@@ -1,6 +1,6 @@
 # inflame
 
-Repo contains metadata and scripts associated with [Hollingsworth, et al. "Spatiotemporal proteomic profiling of cellular responses to NLRP3 agonists"](https://harperlab.pubpub.org/pub/k4d7di7n/draft?access=7yzgwgnf). 
+Repo contains metadata and scripts associated with [Hollingsworth, et al. "Spatiotemporal proteomic profiling of cellular responses to NLRP3 agonists"](https://harperlab.pubpub.org/pub/nlrp3/release/1). 
 
 To interact with the data, please head to the [visualization app](https://harperlab.connect.hms.harvard.edu/inflame/): [https://harperlab.connect.hms.harvard.edu/inflame/](https://harperlab.connect.hms.harvard.edu/inflame/). 
 
